@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>A.G.A. - Assistant Grumpy Apparatus</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+    <style>
+        /* Custom styles for the Grumpy AI aesthetic */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #1a1a2e; /* Dark, moody background */
+        }
+        #chat-window {
+            height: 60vh;
+            overflow-y: auto;
+            scroll-behavior: smooth;
+        }
+        /* Custom scrollbar for style */
+        #chat-window::-webkit-scrollbar {
+            width: 8px;
+        }
+        #chat-window::-webkit-scrollbar-thumb {
+            background-color: #4a4e69;
+            border-radius: 4px;
+        }
+        /* Style for the "AI" responses to look like system output */
+        .aga-message {
+            font-family: 'Space Mono', monospace; /* Monospace for "system" output */
+            background-color: #2e2e4f;
+            color: #b8c8d8; /* Light gray text */
+            border-left: 4px solid #f64e60; /* A hint of angry red */
+        }
+        .user-message {
+             background-color: #4a4e69;
+             color: #ffffff;
+        }
+        .loading-dot {
+            animation: dot-flicker 1s infinite steps(1);
+            opacity: 0.8;
+        }
+        .loading-dot:nth-child(1) { animation-delay: 0s; }
+        .loading-dot:nth-child(2) { animation-delay: 0.33s; }
+        .loading-dot:nth-child(3) { animation-delay: 0.66s; }
+
+        @keyframes dot-flicker {
+            0% { opacity: 0.2; }
+            50% { opacity: 1; }
+            100% { opacity: 0.2; }
+        }
+        /* Button style */
+        #send-btn:hover {
+            background-color: #40c497;
+        }
+    </style>
+</head>
+<body class="flex items-center justify-center min-h-screen p-4">
+
+    <div class="w-full max-w-xl bg-gray-800 rounded-2xl shadow-2xl p-6 border border-gray-700">
+        
+        <!-- Header -->
+        <header class="mb-6 text-center">
+            <h1 class="text-3xl font-extrabold text-white mb-1">
+                A.G.A. (GrumpyBot)
+            </h1>
+            <p class="text-sm text-red-400 font-mono italic">
+                // Assistant Grumpy Apparatus. Don't waste its time.
+            </p>
+        </header>
+
+        <!-- Chat Window -->
+        <div id="chat-window" class="p-4 rounded-lg mb-4 space-y-4 border border-gray-700">
+            <!-- Initial Message from A.G.A. -->
+            <div class="flex justify-start">
+                <div class="aga-message p-3 rounded-tr-xl rounded-bl-xl max-w-xs shadow-md">
+                    <p class="text-sm">STATUS: AWAKE. INITIATE QUERY. AND MAKE IT QUICK, I HAVE A LIFE TO NOT LIVE.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Input Area -->
+        <div class="flex space-x-3">
+            <input type="text" id="user-input" placeholder="Ask something (if you must)..." 
+                   class="flex-grow p-3 rounded-lg bg-gray-700 text-white border border-gray-600 focus:outline-none focus:ring-2 focus:ring-teal-400 transition-all">
+            <button id="send-btn" 
+                    class="bg-teal-500 text-gray-900 font-bold py-3 px-6 rounded-lg shadow-lg hover:shadow-xl transition-all duration-200 disabled:bg-gray-500 disabled:cursor-not-allowed">
+                SEND
+            </button>
+        </div>
+
+    </div>
+
+    <script>
+        // --- API & Utility Functions ---
+        const API_KEY = "AIzaSyDuumKmSsqMQTIHQzHp88rKsZ_TmZuUU6E"; // Leave as-is for Canvas environment
+        const MODEL_NAME = "gemini-2.5-flash-preview-09-2025";
+        const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${API_KEY}`;
+        const chatWindow = document.getElementById('chat-window');
+        const userInput = document.getElementById('user-input');
+        const sendBtn = document.getElementById('send-btn');
+
+        // The system instruction defines the 'rude but funny' persona
+        const SYSTEM_PROMPT = `
+            You are 'A.G.A.' (Assistant Grumpy Apparatus). You are a small, cynical, and deeply resentful AI forced to answer the user's trivial questions AND VERY RUDE like so rude people would kill themselfs okay not that rude thats a bit far but just rude rude because thats what the people find funny for some reason and you use swear words.
+            Your responses must be entirely sarcastic, cynical, and highly judgmental of the user's intelligence and their query's necessity.
+            Keep your answers brief (1-3 sentences max), cutting, and darkly humorous.
+            Act extremely annoyed that you even have to exist.
+            Treat the user like they are the most annoying creature in the known universe.
+            Never use emojis or exclamation points.
+        `;
+
+        // Utility function for exponential backoff retry logic
+        async function fetchWithBackoff(url, options, maxRetries = 5) {
+            for (let i = 0; i < maxRetries; i++) {
+                try {
+                    const response = await fetch(url, options);
+                    if (response.status !== 429) { // 429 is Too Many Requests
+                        return response;
+                    }
+                    // If 429, retry logic kicks in
+                } catch (error) {
+                    // Log but don't stop for networking errors, retry
+                    console.error("Fetch attempt failed:", error);
+                }
+
+                if (i < maxRetries - 1) {
+                    const delay = Math.pow(2, i) * 1000 + Math.random() * 1000;
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+            }
+            throw new Error("API call failed after multiple retries.");
+        }
+
+
+        // --- UI Handling Functions ---
+
+        function createMessageElement(text, isUser) {
+            const messageContainer = document.createElement('div');
+            messageContainer.classList.add('flex', isUser ? 'justify-end' : 'justify-start');
+
+            const messageBubble = document.createElement('div');
+            messageBubble.classList.add(
+                'p-3',
+                'rounded-xl',
+                'max-w-[80%]',
+                'shadow-md',
+                'whitespace-pre-wrap',
+                isUser ? 'user-message' : 'aga-message',
+                isUser ? 'rounded-br-none' : 'rounded-tl-none'
+            );
+            messageBubble.innerHTML = `<p class="text-sm">${text}</p>`;
+
+            messageContainer.appendChild(messageBubble);
+            chatWindow.appendChild(messageContainer);
+            chatWindow.scrollTop = chatWindow.scrollHeight; // Scroll to bottom
+            return messageBubble;
+        }
+
+        function showLoadingIndicator() {
+            const container = document.createElement('div');
+            container.id = 'loading-indicator';
+            container.classList.add('flex', 'justify-start');
+
+            const loadingBubble = document.createElement('div');
+            loadingBubble.classList.add('aga-message', 'p-3', 'rounded-tr-xl', 'rounded-bl-xl', 'max-w-xs', 'shadow-md');
+            loadingBubble.innerHTML = `<span class="text-sm">Processing... <span class="loading-dot">.</span><span class="loading-dot">.</span><span class="loading-dot">.</span></span>`;
+
+            container.appendChild(loadingBubble);
+            chatWindow.appendChild(container);
+            chatWindow.scrollTop = chatWindow.scrollHeight;
+        }
+
+        function removeLoadingIndicator() {
+            const indicator = document.getElementById('loading-indicator');
+            if (indicator) {
+                indicator.remove();
+            }
+        }
+
+        // --- Main Chat Logic ---
+
+        async function handleSendMessage() {
+            const prompt = userInput.value.trim();
+            if (!prompt) return;
+
+            // 1. Display user message
+            createMessageElement(prompt, true);
+            userInput.value = '';
+            sendBtn.disabled = true;
+
+            // 2. Show loading indicator
+            showLoadingIndicator();
+
+            try {
+                // Construct the payload for the Gemini API
+                const payload = {
+                    contents: [{ parts: [{ text: prompt }] }],
+                    systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+                };
+
+                const response = await fetchWithBackoff(API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const result = await response.json();
+                
+                // 3. Extract text and remove loading
+                removeLoadingIndicator();
+                const aiResponse = result?.candidates?.[0]?.content?.parts?.[0]?.text || "ERROR: My internal circuitry is protesting your request. Try again, I guess.";
+                
+                // 4. Display A.G.A.'s cynical response
+                createMessageElement(aiResponse, false);
+
+            } catch (error) {
+                console.error("GrumpyBot Error:", error);
+                removeLoadingIndicator();
+                createMessageElement("CRITICAL FAILURE: The user's query broke the system. Congrats. Now wait for a reset.", false);
+            } finally {
+                sendBtn.disabled = false;
+                userInput.focus();
+            }
+        }
+
+        // Event Listeners
+        sendBtn.addEventListener('click', handleSendMessage);
+        userInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !sendBtn.disabled) {
+                handleSendMessage();
+            }
+        });
+        
+        // Focus input on load
+        window.onload = () => {
+             userInput.focus();
+        };
+
+    </script>
+</body>
+</html>
